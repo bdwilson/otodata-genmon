@@ -17,7 +17,8 @@ https://github.com/bdwilson/hubitat/tree/master/Otodata-Propane. Add both app
 (enable oauth!) and driver, then create a virtual driver and name it whatever you wish. Add the
 user app and select this newly-created driver. Get the URL and Key from this
 and add it back into otodata_receiver.pl.
-6. Make sure the pi user can run things as sudo without a password. Edit /etc/sudoers to add the following: <code> pi ALL = NOPASSWD: /usr/bin/hcitool </code>
+6. Make sure the pi user can run things as sudo without a password. Edit
+/etc/sudoers to add the following:<br><code>pi ALL = NOPASSWD: /usr/bin/hcitool </code>
 7. <code>sudo cp otodata.service /etc/systemd/system </code>
 8. Enable systemd service: <code>sudo systemctl enable otodata</code>
 9. Start systemd service: <code>sudo systemctl start otodata</code>
