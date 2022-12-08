@@ -1,10 +1,10 @@
 [Unit]
-Description=Start otodata bluetooth reciever
+Description=Start otodata bluetooth receiver
 After=network.target
 
 [Service]
 ExecStartPre=/bin/bash -c '/usr/bin/hciconfig hci0 down && /usr/bin/hciconfig hci0 up'
-ExecStart=/home/pi/genmon/OtherApps/otodata_reciever.pl
+ExecStart=/home/pi/genmon/OtherApps/otodata_receiver.pl
 
 [Install]
 WantedBy=multi-user.target
