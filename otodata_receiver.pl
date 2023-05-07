@@ -44,6 +44,7 @@ while (<$fh>) {
 	if (/level\:\s(.*)\s\%/) {
 		$level = $1; 
 		#print "HERE $1\n";
+		if ($debug) { print "OTODATA: Level $1\n"; }
 		if ($level) {
 			if (($old_level != $level)) {
 				if ($debug) {
@@ -60,6 +61,9 @@ while (<$fh>) {
 			}
 			$old_level = $level;
 		}
+	}
+	if (/error/) {
+		exit(1);
 	}
 }
 close $fh;

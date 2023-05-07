@@ -1,10 +1,14 @@
 [Unit]
-Description=Start otodata bluetooth receiver
+Description=Start otodata bluetooth reciever
 After=network.target
+StartLimitIntervalSec=30
+StartLimitBurst=2
 
 [Service]
 ExecStartPre=/bin/bash -c '/usr/bin/hciconfig hci0 down && /usr/bin/hciconfig hci0 up'
-ExecStart=/home/pi/genmon/OtherApps/otodata_receiver.pl
+ExecStart=/home/pi/genmon/OtherApps/otodata_reciever.pl
+ExecStop=/bin/bash -c '/usr/bin/hciconfig hci0 down'
+Restart=on-failure
 
 [Install]
 WantedBy=multi-user.target
