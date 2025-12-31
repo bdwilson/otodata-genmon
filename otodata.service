@@ -1,14 +1,32 @@
 [Unit]
-Description=Start otodata bluetooth reciever
-After=network.target
+Description=Otodata Bluetooth Receiver
+After=network.target bluetooth.target
 StartLimitIntervalSec=30
 StartLimitBurst=2
 
 [Service]
+Type=simple
+
+# Reset Bluetooth adapter before starting
 ExecStartPre=/bin/bash -c '/usr/bin/hciconfig hci0 down && /usr/bin/hciconfig hci0 up'
-ExecStart=/home/pi/genmon/OtherApps/otodata_reciever.pl
+
+# Run Python script (executable with shebang)
+ExecStart=/usr/bin/python3 /home/pi/genmon/OtherApps/otodata_receiver.py
+
+# Optionally bring adapter down on stop
 ExecStop=/bin/bash -c '/usr/bin/hciconfig hci0 down'
+
+# Automatically restart on crash
 Restart=on-failure
+RestartSec=5
+
+# Recommended: log to journalctl
+StandardOutput=journal
+StandardError=journal
+
+# Run as pi user if desired (uncomment if needed)
+#User=pi
+#Group=pi
 
 [Install]
 WantedBy=multi-user.target
