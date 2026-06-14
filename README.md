@@ -1,39 +1,43 @@
 # otodata-genmon
 
 Monitors an **Otodata TM6030** BLE propane tank sensor and feeds the level
-into [genmon](https://github.com/jgyates/genmon) (and optionally
-[Hubitat](https://github.com/bdwilson/hubitat/tree/master/Otodata-Propane)).
+into [genmon](https://github.com/jgyates/genmon).
 
 ---
 
-## Option 1 — Native genmon addon (recommended)
+## Installation — native genmon addon
 
-`genotodata.py` integrates directly with genmon's addon loader. Configuration
-lives in a plain INI file; no source code editing required.
+`genotodata.py` integrates directly with genmon's addon loader (`genloader`).
+Configuration lives in a plain INI file; no source code editing required.
 
 ### Prerequisites
 
 - genmon installed and running (typically `/home/pi/genmon/`)
-- Bluetooth working and the TM6030 visible (`bluetoothctl scan on`)
+- Bluetooth working and the TM6030 visible:
+  ```bash
+  bluetoothctl scan on
+  ```
 - Python package: `pip3 install bleak`
 - User running genmon must be in the `bluetooth` group:
-  `sudo usermod -aG bluetooth pi` (then log out / back in)
+  ```bash
+  sudo usermod -aG bluetooth pi   # log out and back in after
+  ```
 
-### Installation
+### Steps
 
 ```bash
-# 1. Copy the addon and config template
-sudo cp genotodata.py  /home/pi/genmon/addon/
+# 1. Copy addon and config template into place
+sudo cp genotodata.py   /home/pi/genmon/addon/
 sudo cp genotodata.conf /etc/genmon/
 
-# 2. Edit the config — at minimum set tank_name and capacity
+# 2. Edit the config (tank name, capacity, optional MAC filter)
 sudo nano /etc/genmon/genotodata.conf
 
-# 3. Register the addon with genmon's loader
+# 3. Register with genmon's addon loader
 sudo nano /etc/genmon/genloader.conf
 ```
 
-Add the following block to `genloader.conf` (after the last existing entry):
+Add this block anywhere in `genloader.conf` (after the last existing section):
 
 ```ini
 [genotodata]
@@ -47,12 +51,10 @@ postloaddelay = 0
 ```
 
 ```bash
-# 4. Restart genmon to pick up the new addon
+# 4. Restart genmon
 sudo systemctl restart genmon
-```
 
-Logs appear alongside other genmon addon logs:
-```bash
+# 5. Verify it's running
 sudo journalctl -u genmon -f
 ```
 
@@ -63,51 +65,31 @@ sudo journalctl -u genmon -f
 | `tank_name` | `Propane Tank` | Label shown in the genmon web UI |
 | `capacity` | `0` | Tank size in gallons (0 = omit) |
 | `poll_frequency` | `5` | Minutes between BLE scan cycles |
-| `scan_time` | `30` | Seconds to listen per scan |
-| `mac_address` | *(blank)* | Filter to a specific sensor MAC address |
-| `do_hubitat` | `False` | Enable Hubitat push |
-| `hubitat_url` | — | Hubitat Maker API update URL |
-| `hubitat_key` | — | Hubitat OAuth access token |
+| `scan_time` | `30` | Seconds to listen per scan cycle |
+| `mac_address` | *(blank)* | Filter to a specific sensor MAC; blank = first Otodata device found |
+
+### A note on the genmon Add-On web GUI
+
+genmon's Add-On page only shows addons that are hardcoded into `genserv.py`'s
+`GetAddOns()` function — there is no auto-discovery.  The addon works fine
+when enabled via `genloader.conf`, but it will **not** appear as a toggle in
+the web UI unless this project is merged upstream into
+[jgyates/genmon](https://github.com/jgyates/genmon).  If that interests you,
+the genmon maintainer accepts pull requests for new addons.
 
 ---
 
-## Option 2 — Standalone script (no genmon required)
+## Standalone fallback (`otodata_receiver.py`)
 
-`otodata_receiver.py` is a self-contained script with a matching systemd
-service. It is useful if you only want Hubitat integration or are running
-genmon on a separate host.
+A self-contained script with a systemd service is kept in this repo for
+cases where genmon is not installed or is running on a different host.
+Edit the configuration block at the top of `otodata_receiver.py`, then:
 
-### Setup
-
-1. Verify Bluetooth can see the sensor:
-   ```bash
-   sudo hcitool lescan --duplicates
-   ```
-2. Edit the configuration block at the top of `otodata_receiver.py`.
-3. Allow `hcitool` without a password:
-   ```
-   # /etc/sudoers
-   pi ALL = NOPASSWD: /usr/bin/hcitool
-   ```
-4. Install and start the systemd service:
-   ```bash
-   sudo cp otodata.service /etc/systemd/system/
-   sudo systemctl enable --now otodata
-   sudo journalctl -u otodata -f
-   ```
-
----
-
-## Hubitat setup
-
-Install the Hubitat app and driver from
-<https://github.com/bdwilson/hubitat/tree/master/Otodata-Propane>.
-
-1. Import and install the **app** (enable OAuth).
-2. Import and install the **driver**.
-3. Create a virtual device using that driver.
-4. Open the user app, select the virtual device, and copy the generated URL
-   and access token into the config.
+```bash
+sudo cp otodata.service /etc/systemd/system/
+sudo systemctl enable --now otodata
+sudo journalctl -u otodata -f
+```
 
 ---
 

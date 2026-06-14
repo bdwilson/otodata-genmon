@@ -17,7 +17,10 @@ Add to /etc/genmon/genloader.conf:
   priority = 2
   postloaddelay = 0
 
+  Then restart genmon: sudo systemctl restart genmon
+
 Dependency: pip3 install bleak
+User running genmon must be in the bluetooth group: sudo usermod -aG bluetooth pi
 """
 
 import asyncio
@@ -28,7 +31,6 @@ import signal
 import sys
 import threading
 import time
-import urllib.request
 
 try:
     from bleak import BleakScanner
@@ -77,9 +79,6 @@ class GenOtodata(MySupport):
         self.poll_frequency = self.config.ReadValue("poll_frequency", return_type=int,   default=5)
         self.scan_time      = self.config.ReadValue("scan_time",      return_type=float, default=30.0)
         self.mac_address    = self.config.ReadValue("mac_address",    return_type=str,   default="").strip().lower()
-        self.do_hubitat     = self.config.ReadValue("do_hubitat",     return_type=bool,  default=False)
-        self.hubitat_url    = self.config.ReadValue("hubitat_url",    return_type=str,   default="")
-        self.hubitat_key    = self.config.ReadValue("hubitat_key",    return_type=str,   default="")
 
         try:
             self.generator = ClientInterface(host=host, port=port, log=self.log)
@@ -167,21 +166,6 @@ class GenOtodata(MySupport):
             self._log_error(f"genmon send failed: {e}")
 
     # ------------------------------------------------------------------
-    # Send to Hubitat (optional)
-    # ------------------------------------------------------------------
-
-    def _send_hubitat(self, level):
-        if not self.do_hubitat or not self.hubitat_url:
-            return
-        url = f"{self.hubitat_url}{level}?access_token={self.hubitat_key}"
-        try:
-            with urllib.request.urlopen(url, timeout=10) as resp:
-                body = resp.read().decode("utf-8", errors="ignore")
-                self._log_info(f"Hubitat updated: {level}% -> {body}")
-        except Exception as e:
-            self._log_error(f"Hubitat send failed: {e}")
-
-    # ------------------------------------------------------------------
     # Main poll loop
     # ------------------------------------------------------------------
 
@@ -197,7 +181,6 @@ class GenOtodata(MySupport):
                 if level != self.current_level:
                     self.current_level = level
                     self._send_genmon(level)
-                    self._send_hubitat(level)
                 else:
                     self._log_info("Level unchanged, skipping send.")
             else:
