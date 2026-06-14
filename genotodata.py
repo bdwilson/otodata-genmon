@@ -32,6 +32,11 @@ import sys
 import threading
 import time
 
+# When invoked by genloader the script directory is addon/, but genmonlib
+# lives one level up in the genmon root.  Add it to the path explicitly so
+# the import works regardless of how the script is launched.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 try:
     from bleak import BleakScanner
 except ImportError:
@@ -43,7 +48,7 @@ try:
     from genmonlib.myconfig import MyConfig
     from genmonlib.mysupport import MySupport
 except ImportError:
-    print("genmonlib not found. Ensure this script runs inside a genmon installation.", flush=True)
+    print("genmonlib not found. Expected at", os.path.dirname(os.path.dirname(os.path.abspath(__file__))), flush=True)
     sys.exit(1)
 
 # ------------------------------------------------------------------
