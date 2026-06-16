@@ -1,61 +1,66 @@
 #!/usr/bin/env python3
-"""
-genotodata.py - Genmon addon for the Otodata TM6030 BLE propane tank sensor.
-
-Installation:
-  cp genotodata.py   /home/pi/genmon/addon/
-  cp genotodata.conf /etc/genmon/
-
-Add to /etc/genmon/genloader.conf:
-
-  [genotodata]
-  module = genotodata.py
-  enable = True
-  hardstop = False
-  conffile = genotodata.conf
-  args =
-  priority = 2
-  postloaddelay = 0
-
-  Then restart genmon: sudo systemctl restart genmon
-
-Dependency: pip3 install bleak
-User running genmon must be in the bluetooth group: sudo usermod -aG bluetooth pi
-"""
+# -------------------------------------------------------------------------------
+#    FILE: genotodata.py
+# PURPOSE: Genmon addon for the Otodata TM6030 Bluetooth Low Energy propane
+#          tank sensor.  The TM6030 broadcasts its tank fill level as a
+#          percentage in the BLE advertisement local name, e.g.:
+#              "Otodata level: 72%"
+#          This addon scans for that advertisement and forwards the reading to
+#          genmon via the set_tank_data command.
+#
+#  AUTHOR: Brian Wilson
+#    DATE: 2024
+#
+#   USAGE: Copy to /home/pi/genmon/addon/
+#          Copy genotodata.conf to /etc/genmon/
+#          Add [genotodata] section to /etc/genmon/genloader.conf (see below)
+#          Run the genmon installation script to install dependencies (bleak)
+#
+#          [genotodata]
+#          module = genotodata.py
+#          enable = True
+#          hardstop = False
+#          conffile = genotodata.conf
+#          args =
+#          priority = 2
+#          postloaddelay = 0
+# -------------------------------------------------------------------------------
 
 import asyncio
 import json
 import os
 import re
-import signal
 import sys
 import threading
 import time
 
-# When invoked by genloader the script directory is addon/, but genmonlib
-# lives one level up in the genmon root.  Add it to the path explicitly so
-# the import works regardless of how the script is launched.
+# ---------------------------------------------------------------------------
+# Ensure genmonlib is importable when invoked by genloader without PYTHONPATH.
+# The addon lives in <genmon_root>/addon/; genmonlib is one level up.
+# ---------------------------------------------------------------------------
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# ---------------------------------------------------------------------------
+# Optional BLE dependency — log a clear message if missing rather than crash.
+# Install with: sudo pip3 install bleak
+# ---------------------------------------------------------------------------
 try:
     from bleak import BleakScanner
-except ImportError:
-    print("bleak not found. Run: pip3 install bleak", flush=True)
-    sys.exit(1)
 
-try:
-    from genmonlib.myclient import ClientInterface
-    from genmonlib.myconfig import MyConfig
-    from genmonlib.mysupport import MySupport
+    bleak_installed = True
 except ImportError:
-    print("genmonlib not found. Expected at", os.path.dirname(os.path.dirname(os.path.abspath(__file__))), flush=True)
-    sys.exit(1)
+    bleak_installed = False
 
-# ------------------------------------------------------------------
+from genmonlib.myclient import ClientInterface
+from genmonlib.myconfig import MyConfig
+from genmonlib.mysupport import MySupport
+from genmonlib.mythread import MyThread
+
+# ---------------------------------------------------------------------------
 LEVEL_REGEX = re.compile(r"level:\s*([0-9]+(?:\.[0-9]+)?)\s*%", re.IGNORECASE)
 
 
-class GenOtodata(MySupport):
+class GenOtodataData(MySupport):
 
     def __init__(
         self,
@@ -66,12 +71,24 @@ class GenOtodata(MySupport):
         port=9082,
         console=None,
     ):
-        super(GenOtodata, self).__init__()
+        super(GenOtodataData, self).__init__()
 
         self.log = log
+        self.loglocation = loglocation
         self.console = console
+        self.host = host
+        self.port = port
         self.running = True
         self.current_level = None
+        self.CommAccessLock = threading.Lock()
+
+        if not bleak_installed:
+            self.LogError(
+                "GenOtodataData: Required library 'bleak' is not installed. "
+                "Run the genmon installation script or: sudo pip3 install bleak"
+            )
+            self.running = False
+            return
 
         conf_path = os.path.join(
             ConfigFilePath if ConfigFilePath else "/etc/genmon/",
@@ -79,49 +96,52 @@ class GenOtodata(MySupport):
         )
         self.config = MyConfig(filename=conf_path, section="genotodata", log=self.log)
 
-        self.tank_name      = self.config.ReadValue("tank_name",      return_type=str,   default="Propane Tank")
-        self.capacity       = self.config.ReadValue("capacity",       return_type=int,   default=0)
-        self.poll_frequency = self.config.ReadValue("poll_frequency", return_type=int,   default=5)
-        self.scan_time      = self.config.ReadValue("scan_time",      return_type=float, default=30.0)
-        self.mac_address    = self.config.ReadValue("mac_address",    return_type=str,   default="").strip().lower()
+        self.tank_name = self.config.ReadValue(
+            "tank_name", return_type=str, default="Propane Tank"
+        )
+        self.capacity = self.config.ReadValue("capacity", return_type=int, default=0)
+        self.poll_frequency = self.config.ReadValue(
+            "poll_frequency", return_type=int, default=5
+        )
+        self.scan_time = self.config.ReadValue(
+            "scan_time", return_type=float, default=30.0
+        )
+        self.mac_address = (
+            self.config.ReadValue("mac_address", return_type=str, default="")
+            .strip()
+            .lower()
+        )
 
         try:
-            self.generator = ClientInterface(host=host, port=port, log=self.log)
-        except Exception as e:
-            self._log_error(f"Cannot connect to genmon at {host}:{port}: {e}")
-            self.generator = None
+            self.Generator = ClientInterface(host=host, port=port, log=self.log)
+        except Exception as e1:
+            self.LogErrorLine(
+                "GenOtodataData: Cannot connect to genmon at %s:%d: %s"
+                % (host, port, str(e1))
+            )
+            self.Generator = None
 
-        signal.signal(signal.SIGTERM, self._on_signal)
-        signal.signal(signal.SIGINT, self._on_signal)
-
-        self._poll_thread = threading.Thread(
-            target=self._poll_loop, daemon=True, name="GenOtodataPoll"
+        self.Threads["TankCheckThread"] = MyThread(
+            self.TankCheckThread, Name="TankCheckThread"
         )
-        self._poll_thread.start()
-        self._log_info("GenOtodata started.")
+        self.LogError("GenOtodataData: Started.")
 
     # ------------------------------------------------------------------
-    # Logging helpers (MySupport logging requires self.log to be set)
-    # ------------------------------------------------------------------
-
-    def _log_info(self, msg):
-        if self.log:
-            self.log.info(msg)
-        if self.console:
-            self.console.info(msg)
-
-    def _log_error(self, msg):
-        if self.log:
-            self.log.error(msg)
-        if self.console:
-            self.console.error(msg)
+    def SendCommand(self, Command):
+        if not Command:
+            return "Invalid command"
+        if self.Generator is None:
+            return ""
+        try:
+            with self.CommAccessLock:
+                return self.Generator.ProcessMonitorCommand(Command)
+        except Exception as e1:
+            self.LogErrorLine("Error in SendCommand: " + str(e1))
+            return ""
 
     # ------------------------------------------------------------------
-    # BLE scanning via bleak
-    # ------------------------------------------------------------------
-
     async def _ble_scan_async(self):
-        """Scan for scan_time seconds; return (address, level) or (None, None)."""
+        """Scan for scan_time seconds; return (address, level_pct) or (None, None)."""
         result = {}
 
         def _callback(device, adv_data):
@@ -139,87 +159,70 @@ class GenOtodata(MySupport):
         await scanner.start()
         await asyncio.sleep(self.scan_time)
         await scanner.stop()
-
         return result.get("addr"), result.get("level")
 
-    def _ble_scan(self):
+    def GetTankReading(self):
         loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
         try:
             return loop.run_until_complete(self._ble_scan_async())
-        except Exception as e:
-            self._log_error(f"BLE scan error: {e}")
+        except Exception as e1:
+            self.LogErrorLine("GenOtodataData: BLE scan error: " + str(e1))
             return None, None
         finally:
             loop.close()
 
     # ------------------------------------------------------------------
-    # Send to genmon
-    # ------------------------------------------------------------------
-
-    def _send_genmon(self, level):
-        if self.generator is None:
+    def TankCheckThread(self):
+        # Brief startup delay so genmon can fully initialise before we connect.
+        if self.WaitForExit("TankCheckThread", 5):
             return
-        data = {"Tank Name": self.tank_name, "Percentage": level}
-        if self.capacity > 0:
-            data["Capacity"] = self.capacity
-        cmd = f"generator: set_tank_data={json.dumps(data)}"
-        try:
-            result = self.generator.ProcessMonitorCommand(cmd)
-            self._log_info(f"genmon updated: {level}% -> {result}")
-        except Exception as e:
-            self._log_error(f"genmon send failed: {e}")
 
-    # ------------------------------------------------------------------
-    # Main poll loop
-    # ------------------------------------------------------------------
-
-    def _poll_loop(self):
-        while self.running:
-            self._log_info(
-                f"Scanning for Otodata TM6030 ({self.scan_time:.0f}s)…"
+        while True:
+            self.LogError(
+                "GenOtodataData: Scanning %.0f s for Otodata TM6030 sensor..."
+                % self.scan_time
             )
-            addr, level = self._ble_scan()
+            addr, level = self.GetTankReading()
 
             if level is not None:
-                self._log_info(f"Sensor [{addr}]: {level}%")
+                self.LogError(
+                    "GenOtodataData: Sensor [%s] level %.1f%%" % (addr, level)
+                )
                 if level != self.current_level:
                     self.current_level = level
-                    self._send_genmon(level)
-                else:
-                    self._log_info("Level unchanged, skipping send.")
+                    data = {"Tank Name": self.tank_name, "Percentage": level}
+                    if self.capacity > 0:
+                        data["Capacity"] = self.capacity
+                    self.SendCommand(
+                        "generator: set_tank_data=" + json.dumps(data)
+                    )
             else:
-                self._log_error(
-                    "Otodata sensor not found. Check Bluetooth and sensor proximity."
+                self.LogError(
+                    "GenOtodataData: Sensor not found during scan window. "
+                    "Check Bluetooth adapter and sensor proximity."
                 )
 
-            # Sleep poll_frequency minutes, waking each second to check running flag.
-            for _ in range(self.poll_frequency * 60):
-                if not self.running:
-                    return
-                time.sleep(1)
+            if self.WaitForExit("TankCheckThread", self.poll_frequency * 60):
+                return
 
     # ------------------------------------------------------------------
-
-    def _on_signal(self, signum, frame):
-        self.running = False
-
     def Close(self):
         self.running = False
-        if getattr(self, "generator", None):
+        if getattr(self, "Generator", None):
             try:
-                self.generator.Close()
+                self.Generator.Close()
             except Exception:
                 pass
+        super(GenOtodataData, self).Close()
 
 
-# ------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 if __name__ == "__main__":
     (console, ConfigFilePath, address, port, loglocation, log) = (
         MySupport.SetupAddOnProgram("genotodata")
     )
 
-    instance = GenOtodata(
+    instance = GenOtodataData(
         log=log,
         loglocation=loglocation,
         ConfigFilePath=ConfigFilePath,
