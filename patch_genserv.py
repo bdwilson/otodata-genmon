@@ -2,188 +2,192 @@
 """
 patch_genserv.py - Insert the genotodata addon into genserv.py.
 
-Usage:
-    python3 patch_genserv.py /path/to/genmon/genserv.py
+Usage (run from inside your genmon fork directory):
+    python3 /path/to/otodata-genmon/patch_genserv.py genserv.py
 
 The script is idempotent: it will not apply the patch a second time if
 genotodata is already present.
+
+After running, verify with:
+    grep -n genotodata genserv.py
 """
 
-import re
 import sys
 
-# ---------------------------------------------------------------------------
-# The three blocks to insert
-# ---------------------------------------------------------------------------
 
-CONST_LINE = 'GENOTODATA_CONFIG = os.path.join(ConfigPath, "genotodata.conf")\n'
+def leading_spaces(line):
+    """Return the leading whitespace of a line as a string."""
+    return line[: len(line) - len(line.lstrip())]
 
-CONFIGFILES_LINE = (
-    'ConfigFiles[GENOTODATA_CONFIG] = MyConfig(\n'
-    '    filename=GENOTODATA_CONFIG, section="genotodata", log=log\n'
-    ')\n'
-)
 
-ADDON_BLOCK = '''
-# GENOTODATA
-if sys.version_info >= (3, 7):
-    Description = "Support Otodata TM6030 Propane Tank Sensor"
-    try:
-        import bleak
-    except Exception as e1:
-        Description = (
-            Description
-            + "<br/><font color=\\'red\\'>The required libraries for this add on "
-            "are not installed, please run the installation script.</font>"
-        )
-
-    AddOnCfg["genotodata"] = collections.OrderedDict()
-    AddOnCfg["genotodata"]["enable"] = ConfigFiles[GENLOADER_CONFIG].ReadValue(
-        "enable", return_type=bool, section="genotodata", default=False
+def addon_block(indent):
+    """Return the full AddOnCfg['genotodata'] block at the given indent level."""
+    i = indent  # e.g. "    "
+    i2 = i + "    "
+    i3 = i2 + "    "
+    return (
+        f"\n"
+        f"{i}# GENOTODATA\n"
+        f"{i}if sys.version_info >= (3, 7):\n"
+        f'{i2}Description = "Support Otodata TM6030 Propane Tank Sensor"\n'
+        f"{i2}try:\n"
+        f"{i3}import bleak\n"
+        f"{i2}except Exception as e1:\n"
+        f"{i3}Description = (\n"
+        f'{i3}    Description\n'
+        f'{i3}    + "<br/><font color=\'red\'>The required libraries for this add on "\n'
+        f'{i3}    "are not installed, please run the installation script.</font>"\n'
+        f"{i3})\n"
+        f"\n"
+        f'{i2}AddOnCfg["genotodata"] = collections.OrderedDict()\n'
+        f'{i2}AddOnCfg["genotodata"]["enable"] = ConfigFiles[GENLOADER_CONFIG].ReadValue(\n'
+        f'{i3}"enable", return_type=bool, section="genotodata", default=False\n'
+        f"{i2})\n"
+        f'{i2}AddOnCfg["genotodata"]["title"] = "Otodata TM6030 Propane Tank Sensor"\n'
+        f'{i2}AddOnCfg["genotodata"]["description"] = Description\n'
+        f'{i2}AddOnCfg["genotodata"]["icon"] = "mopeka"\n'
+        f'{i2}AddOnCfg["genotodata"]["url"] = (\n'
+        f'{i3}"https://github.com/jgyates/genmon/wiki/"\n'
+        f'{i3}"1----Software-Overview#genototadatapy-optional"\n'
+        f"{i2})\n"
+        f'{i2}AddOnCfg["genotodata"]["parameters"] = collections.OrderedDict()\n'
+        f"\n"
+        f'{i2}AddOnCfg["genotodata"]["parameters"]["tank_name"] = CreateAddOnParam(\n'
+        f"{i3}ConfigFiles[GENOTODATA_CONFIG].ReadValue(\n"
+        f'{i3}    "tank_name", return_type=str, default="Propane Tank"\n'
+        f"{i3}),\n"
+        f'{i3}"string",\n'
+        f'{i3}"Display name for this tank in the genmon web interface.",\n'
+        f'{i3}bounds="",\n'
+        f'{i3}display_name="Tank Name",\n'
+        f"{i2})\n"
+        f'{i2}AddOnCfg["genotodata"]["parameters"]["capacity"] = CreateAddOnParam(\n'
+        f"{i3}ConfigFiles[GENOTODATA_CONFIG].ReadValue(\n"
+        f'{i3}    "capacity", return_type=int, default=0\n'
+        f"{i3}),\n"
+        f'{i3}"int",\n'
+        f'{i3}"Tank capacity in gallons. Set to 0 to omit from genmon data.",\n'
+        f'{i3}bounds="number",\n'
+        f'{i3}display_name="Tank Capacity (gallons)",\n'
+        f"{i2})\n"
+        f'{i2}AddOnCfg["genotodata"]["parameters"]["poll_frequency"] = CreateAddOnParam(\n'
+        f"{i3}ConfigFiles[GENOTODATA_CONFIG].ReadValue(\n"
+        f'{i3}    "poll_frequency", return_type=int, default=5\n'
+        f"{i3}),\n"
+        f'{i3}"int",\n'
+        f'{i3}"The time in minutes between BLE scan cycles. Default is 5 minutes.",\n'
+        f'{i3}bounds="number",\n'
+        f'{i3}display_name="Poll Interval (minutes)",\n'
+        f"{i2})\n"
+        f'{i2}AddOnCfg["genotodata"]["parameters"]["scan_time"] = CreateAddOnParam(\n'
+        f"{i3}ConfigFiles[GENOTODATA_CONFIG].ReadValue(\n"
+        f'{i3}    "scan_time", return_type=float, default=30.0\n'
+        f"{i3}),\n"
+        f'{i3}"float",\n'
+        f'{i3}"Seconds to listen for BLE advertisements per scan cycle. "\n'
+        f'{i3}"Increase if the sensor is far from the Pi.",\n'
+        f'{i3}bounds="number",\n'
+        f'{i3}display_name="Scan Duration (seconds)",\n'
+        f"{i2})\n"
+        f'{i2}AddOnCfg["genotodata"]["parameters"]["mac_address"] = CreateAddOnParam(\n'
+        f"{i3}ConfigFiles[GENOTODATA_CONFIG].ReadValue(\n"
+        f'{i3}    "mac_address", return_type=str, default=""\n'
+        f"{i3}),\n"
+        f'{i3}"string",\n'
+        f'{i3}"Optional: restrict readings to a specific sensor MAC address "\n'
+        f'{i3}"(e.g. aa:bb:cc:dd:ee:ff). Leave blank to use the first Otodata device found.",\n'
+        f'{i3}bounds="",\n'
+        f'{i3}display_name="Sensor MAC Address",\n'
+        f"{i2})\n"
+        f"\n"
     )
-    AddOnCfg["genotodata"]["title"] = "Otodata TM6030 Propane Tank Sensor"
-    AddOnCfg["genotodata"]["description"] = Description
-    AddOnCfg["genotodata"]["icon"] = "mopeka"
-    AddOnCfg["genotodata"]["url"] = (
-        "https://github.com/jgyates/genmon/wiki/"
-        "1----Software-Overview#genototadatapy-optional"
-    )
-    AddOnCfg["genotodata"]["parameters"] = collections.OrderedDict()
-
-    AddOnCfg["genotodata"]["parameters"]["tank_name"] = CreateAddOnParam(
-        ConfigFiles[GENOTODATA_CONFIG].ReadValue(
-            "tank_name", return_type=str, default="Propane Tank"
-        ),
-        "string",
-        "Display name for this tank in the genmon web interface.",
-        bounds="",
-        display_name="Tank Name",
-    )
-    AddOnCfg["genotodata"]["parameters"]["capacity"] = CreateAddOnParam(
-        ConfigFiles[GENOTODATA_CONFIG].ReadValue(
-            "capacity", return_type=int, default=0
-        ),
-        "int",
-        "Tank capacity in gallons. Set to 0 to omit from genmon data.",
-        bounds="number",
-        display_name="Tank Capacity (gallons)",
-    )
-    AddOnCfg["genotodata"]["parameters"]["poll_frequency"] = CreateAddOnParam(
-        ConfigFiles[GENOTODATA_CONFIG].ReadValue(
-            "poll_frequency", return_type=int, default=5
-        ),
-        "int",
-        "The time in minutes between BLE scan cycles. Default is 5 minutes.",
-        bounds="number",
-        display_name="Poll Interval (minutes)",
-    )
-    AddOnCfg["genotodata"]["parameters"]["scan_time"] = CreateAddOnParam(
-        ConfigFiles[GENOTODATA_CONFIG].ReadValue(
-            "scan_time", return_type=float, default=30.0
-        ),
-        "float",
-        "Seconds to listen for BLE advertisements per scan cycle. "
-        "Increase if the sensor is far from the Pi.",
-        bounds="number",
-        display_name="Scan Duration (seconds)",
-    )
-    AddOnCfg["genotodata"]["parameters"]["mac_address"] = CreateAddOnParam(
-        ConfigFiles[GENOTODATA_CONFIG].ReadValue(
-            "mac_address", return_type=str, default=""
-        ),
-        "string",
-        "Optional: restrict readings to a specific sensor MAC address "
-        "(e.g. aa:bb:cc:dd:ee:ff). Leave blank to use the first Otodata device found.",
-        bounds="",
-        display_name="Sensor MAC Address",
-    )
-
-'''
-
-# ---------------------------------------------------------------------------
-
-def find_line_ending_with(lines, suffix, start=0):
-    """Return index of first line (>= start) whose stripped content ends with suffix."""
-    for i in range(start, len(lines)):
-        if lines[i].rstrip().endswith(suffix):
-            return i
-    return -1
 
 
 def patch(path):
     with open(path, "r", encoding="utf-8") as f:
-        content = f.read()
+        lines = f.readlines()
 
+    content = "".join(lines)
     if "genotodata" in content:
         print("genotodata already present in genserv.py — nothing to do.")
         return
 
-    lines = content.splitlines(keepends=True)
-
     # ------------------------------------------------------------------
-    # 1. Insert GENOTODATA_CONFIG constant after GENMOPEKA_CONFIG
+    # 1. Insert GENOTODATA_CONFIG constant after GENMOPEKA_CONFIG line
     # ------------------------------------------------------------------
-    idx = find_line_ending_with(lines, '"genmopeka.conf")')
-    if idx == -1:
-        # Try alternate pattern without trailing )
-        for i, l in enumerate(lines):
-            if "GENMOPEKA_CONFIG" in l and "genmopeka.conf" in l:
-                idx = i
-                break
-    if idx == -1:
-        print("ERROR: Could not find GENMOPEKA_CONFIG constant. Check genserv.py manually.")
-        sys.exit(1)
-    lines.insert(idx + 1, CONST_LINE)
-    print(f"[1/3] Inserted GENOTODATA_CONFIG constant after line {idx + 1}.")
-
-    # ------------------------------------------------------------------
-    # 2. Insert ConfigFiles[GENOTODATA_CONFIG] after ConfigFiles[GENMOPEKA_CONFIG]
-    # ------------------------------------------------------------------
-    # Re-search because we just inserted a line
+    idx = -1
     for i, l in enumerate(lines):
-        if "ConfigFiles[GENMOPEKA_CONFIG]" in l and "MyConfig" in l:
-            # Find the end of this (possibly multi-line) statement
-            end = i
-            while end < len(lines) - 1 and not lines[end].rstrip().endswith(")"):
-                end += 1
-            lines.insert(end + 1, "\n")
-            lines.insert(end + 2, CONFIGFILES_LINE)
-            print(f"[2/3] Inserted ConfigFiles[GENOTODATA_CONFIG] after line {end + 1}.")
+        if "GENMOPEKA_CONFIG" in l and "genmopeka.conf" in l and "os.path.join" in l:
+            idx = i
             break
-    else:
-        print("ERROR: Could not find ConfigFiles[GENMOPEKA_CONFIG]. Check genserv.py manually.")
+    if idx == -1:
+        print("ERROR: Could not find GENMOPEKA_CONFIG constant. Aborting.")
         sys.exit(1)
 
+    # Copy the line's indentation and replace genmopeka with genotodata
+    new_const = lines[idx].replace("GENMOPEKA_CONFIG", "GENOTODATA_CONFIG").replace(
+        "genmopeka.conf", "genotodata.conf"
+    )
+    lines.insert(idx + 1, new_const)
+    print(f"[1/3] Inserted GENOTODATA_CONFIG constant after line {idx + 1}:")
+    print(f"      {new_const.rstrip()}")
+
     # ------------------------------------------------------------------
-    # 3. Insert AddOnCfg["genotodata"] block after genmopeka block ends
+    # 2. Insert "genotodata": ConfigFiles[GENOTODATA_CONFIG] entry
+    #    after "genmopeka": ConfigFiles[GENMOPEKA_CONFIG]
     # ------------------------------------------------------------------
-    # The genmopeka block is the last AddOnCfg["genmopeka"] assignment.
+    target2 = -1
+    for i, l in enumerate(lines):
+        if '"genmopeka"' in l and "ConfigFiles[GENMOPEKA_CONFIG]" in l:
+            target2 = i
+            break
+    if target2 == -1:
+        print('ERROR: Could not find "genmopeka": ConfigFiles[GENMOPEKA_CONFIG]. Aborting.')
+        sys.exit(1)
+
+    new_entry = lines[target2].replace("genmopeka", "genotodata").replace(
+        "GENMOPEKA_CONFIG", "GENOTODATA_CONFIG"
+    )
+    lines.insert(target2 + 1, new_entry)
+    print(f"[2/3] Inserted ConfigFiles dict entry after line {target2 + 1}:")
+    print(f"      {new_entry.rstrip()}")
+
+    # ------------------------------------------------------------------
+    # 3. Insert AddOnCfg["genotodata"] block after the genmopeka block
+    # ------------------------------------------------------------------
+    # Find the LAST occurrence of AddOnCfg["genmopeka"] — that's the end of the block.
     last_mopeka = -1
     for i, l in enumerate(lines):
         if 'AddOnCfg["genmopeka"]' in l:
             last_mopeka = i
 
     if last_mopeka == -1:
-        print('ERROR: Could not find AddOnCfg["genmopeka"]. Check genserv.py manually.')
+        print('ERROR: Could not find AddOnCfg["genmopeka"]. Aborting.')
         sys.exit(1)
 
-    # Walk forward to the end of the genmopeka block (next blank line or
-    # next comment block that starts a new addon section).
+    # Find the "# GENMOPEKA" comment to detect block indentation
+    block_indent = ""
+    for i, l in enumerate(lines):
+        if l.strip() == "# GENMOPEKA":
+            block_indent = leading_spaces(l)
+            break
+
+    # Walk forward from the last genmopeka line to find where the block ends
     end = last_mopeka
     while end < len(lines) - 1:
         end += 1
         stripped = lines[end].strip()
-        # A new addon section starts with a comment like "# GENSOMETHING"
-        if stripped.startswith("# GEN") and stripped.isupper():
+        # Stop at the next top-level comment that looks like another addon section
+        if stripped.startswith("# GEN") and stripped == stripped.upper():
             break
-        # Or the end of the if-block dedents back to column 0 with a blank line
-        if stripped == "" and end + 1 < len(lines):
-            next_stripped = lines[end + 1].strip()
-            if next_stripped.startswith("# GEN") or next_stripped == "":
-                break
+        # Or two consecutive blank lines
+        if stripped == "" and end + 1 < len(lines) and lines[end + 1].strip() == "":
+            end += 1
+            break
 
-    lines.insert(end, ADDON_BLOCK)
-    print(f"[3/3] Inserted AddOnCfg['genotodata'] block after line {end}.")
+    block = addon_block(block_indent)
+    lines.insert(end, block)
+    print(f"[3/3] Inserted AddOnCfg['genotodata'] block before line {end + 1}.")
 
     # ------------------------------------------------------------------
     # Write patched file
