@@ -30,6 +30,7 @@ import asyncio
 import json
 import os
 import re
+import subprocess
 import sys
 import threading
 import time
@@ -162,6 +163,16 @@ class GenOtodataData(MySupport):
         return result.get("addr"), result.get("level")
 
     def GetTankReading(self):
+        # Ensure the BLE adapter is powered on. Genmon runs as root so this
+        # always succeeds; it is a no-op if the adapter is already up.
+        try:
+            subprocess.run(
+                ["hciconfig", "hci0", "up"],
+                capture_output=True,
+                timeout=5,
+            )
+        except Exception:
+            pass
         loop = asyncio.new_event_loop()
         try:
             return loop.run_until_complete(self._ble_scan_async())
