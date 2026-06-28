@@ -32,7 +32,7 @@ Enable genhubitat in the genmon web interface under **Add-Ons**. On first enable
 
 **API Endpoints**
 
-The addon exposes the following endpoints. All endpoints except `/api/health` require a `Bearer` token in the `Authorization` header matching the configured API key.
+The API is modelled after the Home Assistant integration endpoints used by genhalink, making the Hubitat driver structurally familiar to anyone who has worked with that integration. The addon exposes the following endpoints. All endpoints except `/api/health` require a `Bearer` token in the `Authorization` header matching the configured API key.
 
 | Method | Path | Description |
 |--------|------|-------------|
