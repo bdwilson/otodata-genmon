@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -------------------------------------------------------------------------------
 #    FILE: genotodata.py
-# PURPOSE: Genmon addon for the Otodata TM6030 Bluetooth Low Energy propane
-#          tank sensor.  The TM6030 broadcasts its tank fill level as a
-#          percentage in the BLE advertisement local name, e.g.:
-#              "Otodata level: 72%"
+# PURPOSE: Genmon addon for Otodata Bluetooth Low Energy propane tank sensors
+#          (TM5030, TM5040, TM6030).  The sensor broadcasts its tank fill level
+#          as a percentage in a BLE advertisement local name, e.g.:
+#              "Otodata level: 72%"  or  "level: 49.3 % horiz"
 #          This addon scans for that advertisement and forwards the reading to
 #          genmon via the set_tank_data command.
 #
@@ -146,15 +146,23 @@ class GenOtodataData(MySupport):
         result = {}
 
         def _callback(device, adv_data):
-            name = device.name or (adv_data.local_name if adv_data else "") or ""
-            m = LEVEL_REGEX.search(name)
-            if not m:
-                return
+            # The device rotates through several advertisement local names
+            # (e.g. "TM5040 28580758", "310410.1|0|-64", "level: 49.3 % horiz").
+            # device.name is cached by BlueZ and stays as the model name, so
+            # we must check adv_data.local_name independently to catch the
+            # level advertisement.
             addr = device.address.lower()
             if self.mac_address and addr != self.mac_address:
                 return
-            result["addr"] = device.address
-            result["level"] = float(m.group(1))
+            local = (adv_data.local_name if adv_data else None) or ""
+            for candidate in (device.name or "", local):
+                if not candidate:
+                    continue
+                m = LEVEL_REGEX.search(candidate)
+                if m:
+                    result["addr"] = device.address
+                    result["level"] = float(m.group(1))
+                    break
 
         scanner = BleakScanner(detection_callback=_callback)
         await scanner.start()
